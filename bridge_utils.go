@@ -58,18 +58,18 @@ func createBridgeFromNetID(netID string) error {
 }
 
 func patchBridge(bridge netlink.Link) error {
-	// Creates a new RTM_NEWLINK request
-	// NLM_F_ACK is used to receive acks when operations are executed
+	// Creates a new RTM_NEWLINK request.
+	// NLM_F_ACK is used to receive acks when operations are executed.
 	req := nl.NewNetlinkRequest(unix.RTM_NEWLINK, unix.NLM_F_ACK)
 
-	// Search for the bridge interface by its index (and bring it UP too)
+	// Search for the bridge interface by its index (and bring it UP too).
 	msg := nl.NewIfInfomsg(unix.AF_UNSPEC)
 	msg.Change = unix.IFF_UP
 	msg.Flags = unix.IFF_UP
 	msg.Index = int32(bridge.Attrs().Index)
 	req.AddData(msg)
 
-	// Patch ageing_time and group_fwd_mask
+	// Patch ageing_time and group_fwd_mask.
 	linkInfo := nl.NewRtAttr(unix.IFLA_LINKINFO, nil)
 	linkInfo.AddRtAttr(nl.IFLA_INFO_KIND, nl.NonZeroTerminated(bridge.Type()))
 

@@ -25,39 +25,45 @@ func loadState() (*bgpLB, error) {
 	if err := json.Unmarshal(data, &b); err != nil {
 		return nil, err
 	}
+
+	// Small guard if persisted state is corrupted, contains {"Networks": null}, or the field is absent.
+	if b.Networks == nil {
+		b.Networks = make(map[string]*bgpNetwork)
+	}
+
 	b.scope = driverScope
 	return &b, nil
 }
 
 func addAdvertisedSubnet(ctx context.Context, netID, subnet string) error {
-	net := &advertisedNetwork{}
+	advNetwork := &advertisedNetwork{}
 
 	lbServer.Lock()
 	if n, ok := lbServer.advertisedNetworks[netID]; !ok {
-		lbServer.advertisedNetworks[netID] = net
+		lbServer.advertisedNetworks[netID] = advNetwork
 	} else {
-		net = n
+		advNetwork = n
 	}
 	lbServer.Unlock()
 
-	net.Lock()
-	if slices.Contains(net.subnets, subnet) {
-		net.Unlock()
+	advNetwork.Lock()
+	if slices.Contains(advNetwork.subnets, subnet) {
+		advNetwork.Unlock()
 		return fmt.Errorf("addAdvertisedSubnet: the subnet '%s' is already advertised", subnet)
 	}
-	// reserve the subnet before the external call
-	net.subnets = append(net.subnets, subnet)
-	net.Unlock()
+	// Reserve the subnet before the external call.
+	advNetwork.subnets = append(advNetwork.subnets, subnet)
+	advNetwork.Unlock()
 
 	if !isPrefixAdvertised(ctx, subnet) {
 		if err := advertisePrefix(ctx, subnet); err != nil {
-			net.Lock()
-			// remove the reserved subnet if advertising failed
-			idx := slices.Index(net.subnets, subnet)
+			advNetwork.Lock()
+			// Remove the reserved subnet if advertising failed.
+			idx := slices.Index(advNetwork.subnets, subnet)
 			if idx >= 0 {
-				net.subnets = slices.Delete(net.subnets, idx, idx+1)
+				advNetwork.subnets = slices.Delete(advNetwork.subnets, idx, idx+1)
 			}
-			net.Unlock()
+			advNetwork.Unlock()
 			return fmt.Errorf("addAdvertisedSubnet: failed to advertise the subnet: %w", err)
 		}
 	}
@@ -68,16 +74,16 @@ func addAdvertisedSubnet(ctx context.Context, netID, subnet string) error {
 func delAdvertisedNetwork(ctx context.Context, netID string) error {
 	lbServer.Lock()
 
-	net, ok := lbServer.advertisedNetworks[netID]
+	advNetwork, ok := lbServer.advertisedNetworks[netID]
 	if !ok {
 		lbServer.Unlock()
 		return fmt.Errorf("delAdvertisedNetwork: network '%s' is not advertised", netID[:11])
 	}
 	lbServer.Unlock()
 
-	net.Lock()
-	subnets := append([]string(nil), net.subnets...)
-	net.Unlock()
+	advNetwork.Lock()
+	subnets := append([]string(nil), advNetwork.subnets...)
+	advNetwork.Unlock()
 
 	for _, subnet := range subnets {
 		if isPrefixAdvertised(ctx, subnet) {

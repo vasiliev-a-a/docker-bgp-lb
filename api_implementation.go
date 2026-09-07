@@ -98,7 +98,7 @@ func (d *bgpLB) DeleteNetwork(r *api.DeleteNetworkRequest) error {
 	d.Lock()
 	defer d.Unlock()
 
-	/* Skip if not in map */
+	// Skip if not in map.
 	if _, ok := d.Networks[r.NetworkID]; !ok {
 		return nil
 	}
@@ -129,7 +129,7 @@ func (d *bgpLB) CreateEndpoint(r *api.CreateEndpointRequest) (*api.CreateEndpoin
 	d.Lock()
 	defer d.Unlock()
 
-	/* Throw error if not in map */
+	// Throw error if not in map.
 	if _, ok := d.Networks[r.NetworkID]; !ok {
 		return nil, types.NotFoundErrorf("network %s does not exist", r.NetworkID)
 	}
@@ -138,7 +138,7 @@ func (d *bgpLB) CreateEndpoint(r *api.CreateEndpointRequest) (*api.CreateEndpoin
 
 	resp := &api.CreateEndpointResponse{}
 
-	// Start Goroutine which will add local and BGP routes after container is up and running
+	// Start Goroutine which will add local and BGP routes after container is up and running.
 	go addRoute(r.NetworkID, r.EndpointID, r.Interface.Address, r.Interface.AddressIPv6)
 
 	return resp, nil
@@ -148,7 +148,7 @@ func (d *bgpLB) DeleteEndpoint(r *api.DeleteEndpointRequest) error {
 	d.Lock()
 	defer d.Unlock()
 
-	/* Skip if not in map (both network and endpoint) */
+	// Skip if not in map (both network and endpoint).
 	if _, netOk := d.Networks[r.NetworkID]; !netOk {
 		return nil
 	}
@@ -166,7 +166,7 @@ func (d *bgpLB) EndpointInfo(r *api.InfoRequest) (*api.InfoResponse, error) {
 	d.Lock()
 	defer d.Unlock()
 
-	/* Throw error (both network and endpoint) */
+	// Throw error if not in map (both network and endpoint).
 	if _, netOk := d.Networks[r.NetworkID]; !netOk {
 		return nil, types.NotFoundErrorf("network %s does not exist", r.NetworkID)
 	}
@@ -193,7 +193,7 @@ func (d *bgpLB) Join(r *api.JoinRequest) (*api.JoinResponse, error) {
 	d.Lock()
 	defer d.Unlock()
 
-	/* Throw error (both network and endpoint) */
+	// Throw error if not in map (both network and endpoint).
 	if _, netOk := d.Networks[r.NetworkID]; !netOk {
 		return nil, types.NotFoundErrorf("network %s does not exist", r.NetworkID)
 	}
@@ -233,7 +233,7 @@ func (d *bgpLB) Leave(r *api.LeaveRequest) error {
 	d.Lock()
 	defer d.Unlock()
 
-	/* Throw error (both network and endpoint) */
+	// Throw error if not in map (both network and endpoint).
 	if _, netOk := d.Networks[r.NetworkID]; !netOk {
 		return types.NotFoundErrorf("network %s does not exist", r.NetworkID)
 	}
