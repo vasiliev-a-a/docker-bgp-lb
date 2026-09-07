@@ -202,12 +202,17 @@ func (d *bgpLB) Join(r *api.JoinRequest) (*api.JoinResponse, error) {
 		return nil, types.NotFoundErrorf("endpoint %s does not exist in network %s", r.EndpointID, r.NetworkID)
 	}
 
+	bridgeName, err := getBridgeNameByNetID(r.NetworkID)
+	if err != nil {
+		return nil, types.InternalErrorf("get bridge for network %s: %v", r.NetworkID, err)
+	}
+
 	vethInside, vethOutside, err := createVethPair()
 	if err != nil {
 		return nil, types.InternalErrorf("join endpoint %s to network %s: %v", r.EndpointID, r.NetworkID, err)
 	}
 
-	if err := attachInterfaceToBridge(getBridgeNameByNetID(r.NetworkID), vethOutside); err != nil {
+	if err := attachInterfaceToBridge(bridgeName, vethOutside); err != nil {
 		return nil, types.InternalErrorf("join endpoint %s to network %s: %v", r.EndpointID, r.NetworkID, err)
 	}
 

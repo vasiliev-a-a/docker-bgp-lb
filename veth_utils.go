@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -15,7 +16,7 @@ const (
 func getVethRandomName() string {
 	randomUuid, _ := uuid.NewRandom()
 
-	return vethNamePrefix + strings.Replace(randomUuid.String(), "-", "", -1)[:vethNameLen]
+	return vethNamePrefix + truncate(strings.Replace(randomUuid.String(), "-", "", -1), vethNameLen)
 }
 
 func createVethPair() (string, string, error) {
@@ -29,7 +30,7 @@ func createVethPair() (string, string, error) {
 		LinkAttrs: linkAttrs,
 		PeerName:  vethName2,
 	}); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("create veth pair %s-%s: %w", vethName1, vethName2, err)
 	}
 
 	return vethName1, vethName2, nil
@@ -38,11 +39,11 @@ func createVethPair() (string, string, error) {
 func deleteVethPair(vethOutside string) error {
 	iface, err := netlink.LinkByName(vethOutside)
 	if err != nil {
-		return err
+		return fmt.Errorf("get veth interface %s: %w", vethOutside, err)
 	}
 
 	if err := netlink.LinkDel(iface); err != nil {
-		return err
+		return fmt.Errorf("delete veth interface %s: %w", vethOutside, err)
 	}
 
 	return nil

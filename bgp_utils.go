@@ -84,7 +84,12 @@ func addRoute(NetworkID, EndpointID, ipv4, ipv6 string) {
 		return
 	}
 
-	bridgeName := getBridgeNameByNetID(NetworkID)
+	bridgeName, err := getBridgeNameByNetID(NetworkID)
+	if err != nil {
+		log.Errorf("addRoute: failed to get the bridge for the network: %v", err)
+		return
+	}
+
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err != nil {
 		log.Errorf("addRoute error: %v", err)
@@ -140,7 +145,12 @@ func addBgpRoute(prefix string, mask int, ipFamily apiGoBGP.Family_Afi) error {
 }
 
 func delRoute(NetworkID, EndpointID string) {
-	bridgeName := getBridgeNameByNetID(NetworkID)
+	bridgeName, err := getBridgeNameByNetID(NetworkID)
+	if err != nil {
+		log.Errorf("delRoute: failed to get the bridge for the network: %v", err)
+		return
+	}
+
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err != nil {
 		log.Errorf("delRoute error: %v", err)

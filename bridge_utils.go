@@ -15,36 +15,43 @@ const (
 	bridgeNamePrefix = "bgplb"
 )
 
-func getBridgeNameByNetID(netID string) string {
-	return bridgeNamePrefix + "-" + netID[:bridgeNameLen]
+func getBridgeNameByNetID(netID string) (string, error) {
+	if netID == "" {
+		return "", fmt.Errorf("network ID cannot be empty")
+	}
+
+	return bridgeNamePrefix + "-" + truncate(netID, bridgeNameLen), nil
 }
 
 func createBridgeFromNetID(netID string) error {
-	name := getBridgeNameByNetID(netID)
-
-	exists, err := bridgeInterfaceExists(name)
+	bridgeName, err := getBridgeNameByNetID(netID)
 	if err != nil {
-		return err
+		return fmt.Errorf("get bridge name: %w", err)
+	}
+
+	exists, err := bridgeInterfaceExists(bridgeName)
+	if err != nil {
+		return fmt.Errorf("check bridge %s exist: %w", bridgeName, err)
 	}
 
 	if !exists {
 		linkAttrs := netlink.NewLinkAttrs()
-		linkAttrs.Name = name
+		linkAttrs.Name = bridgeName
 
 		if err := netlink.LinkAdd(&netlink.Bridge{
 			LinkAttrs: linkAttrs,
 		}); err != nil {
-			return err
+			return fmt.Errorf("create bridge %s: %w", bridgeName, err)
 		}
 	}
 
-	bridge, err := netlink.LinkByName(name)
+	bridge, err := netlink.LinkByName(bridgeName)
 	if err != nil {
-		return err
+		return fmt.Errorf("get bridge interface %s: %w", bridgeName, err)
 	}
 
 	if err := patchBridge(bridge); err != nil {
-		return err
+		return fmt.Errorf("adjust bridge %s: %w", bridgeName, err)
 	}
 
 	return nil
@@ -75,22 +82,25 @@ func patchBridge(bridge netlink.Link) error {
 	// Execute the request. NETLINK_ROUTE is used to send link updates.
 	_, err := req.Execute(unix.NETLINK_ROUTE, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("execute netlink request: %w", err)
 	}
 
 	return nil
 }
 
 func deleteBridge(netID string) error {
-	bridgeName := getBridgeNameByNetID(netID)
+	bridgeName, err := getBridgeNameByNetID(netID)
+	if err != nil {
+		return fmt.Errorf("get bridge name: %w", err)
+	}
 
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err != nil {
-		return err
+		return fmt.Errorf("get bridge interface %s: %w", bridgeName, err)
 	}
 
 	if err := netlink.LinkDel(bridge); err != nil {
-		return err
+		return fmt.Errorf("delete bridge interface %s: %w", bridgeName, err)
 	}
 
 	return nil
@@ -99,19 +109,19 @@ func deleteBridge(netID string) error {
 func attachInterfaceToBridge(bridgeName string, interfaceName string) error {
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err != nil {
-		return fmt.Errorf("attachInterfaceToBridge: failed to check bridge interface existence: %v", err)
+		return fmt.Errorf("get bridge interface %s: %w", bridgeName, err)
 	}
 
 	iface, err := netlink.LinkByName(interfaceName)
 	if err != nil {
-		return fmt.Errorf("attachInterfaceToBridge: failed to check interface existence: %v", err)
+		return fmt.Errorf("get interface %s: %w", interfaceName, err)
 	}
 
 	if err := netlink.LinkSetMaster(iface, bridge); err != nil {
-		return fmt.Errorf("attachInterfaceToBridge: failed to set link master: %v", err)
+		return fmt.Errorf("set interface %s to master of bridge %s: %w", interfaceName, bridgeName, err)
 	}
 	if err := netlink.LinkSetUp(iface); err != nil {
-		return fmt.Errorf("attachInterfaceToBridge: failed to start link: %v", err)
+		return fmt.Errorf("start interface %s: %w", interfaceName, err)
 	}
 
 	return nil
@@ -126,12 +136,12 @@ func bridgeInterfaceExists(name string) (bool, error) {
 			return false, nil
 		}
 
-		return false, fmt.Errorf("failed to check bridge interface existence: %v", err)
+		return false, fmt.Errorf("get interface %s: %w", name, err)
 	}
 
 	if link.Type() == "bridge" {
 		return true, nil
 	}
 
-	return false, fmt.Errorf("existing interface %s is not a bridge", name)
+	return false, fmt.Errorf("interface %s is not a bridge", name)
 }
