@@ -24,24 +24,24 @@ var (
 func startBgpServer(peerAddress string) error {
 	routerID = os.Getenv("ROUTER_ID")
 	if routerID == "" || net.ParseIP(routerID) == nil {
-		return fmt.Errorf("Environment variable ROUTER_ID is required\r\n")
+		return fmt.Errorf("environment variable ROUTER_ID is required")
 	}
 
 	routerPortInt, err := strconv.Atoi(os.Getenv("ROUTER_PORT"))
 	if err != nil {
-		return fmt.Errorf("Environment variable ROUTER_PORT value is invalid\r\n")
+		return fmt.Errorf("parse ROUTER_PORT=%s as integer: %w", os.Getenv("ROUTER_PORT"), err)
 	}
 	routerPort := int32(routerPortInt)
 
 	localAsInt, err := strconv.Atoi(os.Getenv("LOCAL_AS"))
 	if err != nil {
-		return fmt.Errorf("Environment variable LOCAL_AS value is invalid\r\n")
+		return fmt.Errorf("parse LOCAL_AS=%s as integer: %w", os.Getenv("LOCAL_AS"), err)
 	}
 	localAS = uint32(localAsInt)
 
 	peerAsInt, err := strconv.Atoi(os.Getenv("PEER_AS"))
 	if err != nil {
-		return fmt.Errorf("Environment variable PEER_AS value is invalid\r\n")
+		return fmt.Errorf("parse PEER_AS=%s as integer: %w", os.Getenv("PEER_AS"), err)
 	}
 	peerAs := uint32(peerAsInt)
 
@@ -84,21 +84,23 @@ func addRoute(NetworkID, EndpointID, ipv4, ipv6 string) {
 		return
 	}
 
+	log := log.WithField("network.id", NetworkID).WithField("endpoint.id", EndpointID)
+
 	bridgeName, err := getBridgeNameByNetID(NetworkID)
 	if err != nil {
-		log.Errorf("addRoute: failed to get the bridge for the network: %v", err)
+		log.Errorf("addRoute: failed to get bridge for network: %v", err)
 		return
 	}
 
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err != nil {
-		log.Errorf("addRoute error: %v", err)
+		log.Errorf("addRoute: failed to get bridge interface for network: %v", err)
 		return
 	}
 	if ipv4 != "" {
 		ip, ipv4Dst, _ := net.ParseCIDR(ipv4)
 		if ip.String() != "0.0.0.0" {
-			log.Infof("Adding IPv4 route to %s", ipv4Dst)
+			log.Infof("addRoute: Adding IPv4 route to %s", ipv4Dst)
 			route := netlink.Route{Dst: ipv4Dst, LinkIndex: bridge.Attrs().Index}
 			netlink.RouteAdd(&route)
 
@@ -107,7 +109,7 @@ func addRoute(NetworkID, EndpointID, ipv4, ipv6 string) {
 	}
 	if ipv6 != "" {
 		ip, ipv6Dst, _ := net.ParseCIDR(ipv6)
-		log.Infof("Adding IPv6 route to %s", ipv6Dst)
+		log.Infof("addRoute: Adding IPv6 route to %s", ipv6Dst)
 		route := netlink.Route{Dst: ipv6Dst, LinkIndex: bridge.Attrs().Index}
 		netlink.RouteAdd(&route)
 
@@ -145,38 +147,40 @@ func addBgpRoute(prefix string, mask int, ipFamily apiGoBGP.Family_Afi) error {
 }
 
 func delRoute(NetworkID, EndpointID string) {
+	log := log.WithField("network.id", NetworkID).WithField("endpoint.id", EndpointID)
+
 	bridgeName, err := getBridgeNameByNetID(NetworkID)
 	if err != nil {
-		log.Errorf("delRoute: failed to get the bridge for the network: %v", err)
+		log.Errorf("delRoute: failed to get bridge for network: %v", err)
 		return
 	}
 
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err != nil {
-		log.Errorf("delRoute error: %v", err)
+		log.Errorf("delRoute: failed to get bridge interface for network: %v", err)
 		return
 	}
 
 	v4routes, err := netlink.RouteList(bridge, netlink.FAMILY_V4)
 	if err != nil {
-		log.Errorf("Failed to get local IPv4 routes: %v", err)
+		log.Errorf("delRoute: failed to get local IPv4 routes: %v", err)
 	}
 	for _, v4route := range v4routes {
 		v4dst := &v4route.Dst.IP
 		delBgpRoute(v4dst.String(), 32, apiGoBGP.Family_AFI_IP)
 		if err := netlink.RouteDel(&v4route); err != nil {
-			log.Errorf("Cannot remove local route to: %v , Error: %v", v4dst.String(), err)
+			log.Errorf("delRoute: failed to remove local route to: %v , Error: %v", v4dst.String(), err)
 		}
 	}
 	v6routes, err := netlink.RouteList(bridge, netlink.FAMILY_V6)
 	if err != nil {
-		log.Errorf("Failed to get local IPv6 routes: %v", err)
+		log.Errorf("delRoute: failed to get local IPv6 routes: %v", err)
 	}
 	for _, v6route := range v6routes {
 		v6dst := &v6route.Dst.IP
 		delBgpRoute(v6dst.String(), 128, apiGoBGP.Family_AFI_IP6)
 		if err := netlink.RouteDel(&v6route); err != nil {
-			log.Errorf("Cannot remove local route to: %v , Error: %v", v6dst.String(), err)
+			log.Errorf("delRoute: failed to remove local route to: %v , Error: %v", v6dst.String(), err)
 		}
 	}
 }

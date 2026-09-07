@@ -77,7 +77,7 @@ func delAdvertisedNetwork(ctx context.Context, netID string) error {
 	advNetwork, ok := lbServer.advertisedNetworks[netID]
 	if !ok {
 		lbServer.Unlock()
-		return fmt.Errorf("delAdvertisedNetwork: network '%s' is not advertised", netID[:11])
+		return fmt.Errorf("network %s is not advertised", netID)
 	}
 	lbServer.Unlock()
 
@@ -88,7 +88,7 @@ func delAdvertisedNetwork(ctx context.Context, netID string) error {
 	for _, subnet := range subnets {
 		if isPrefixAdvertised(ctx, subnet) {
 			if err := withdrawPrefix(ctx, subnet); err != nil {
-				return fmt.Errorf("delAdvertisedNetwork: failed to withdraw the subnet %w", err)
+				return fmt.Errorf("withdraw subnet %s: %w", subnet, err)
 			}
 		}
 	}

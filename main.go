@@ -36,12 +36,12 @@ func main() {
 	}
 
 	if net.ParseIP(peerAddress) == nil {
-		log.Errorf("Value of PEER_ADDRESS is not a valid IP address. Got: %s", peerAddress)
+		log.Errorf("Failed to parse PEER_ADDRESS=%s as IP address", peerAddress)
 		return
 	}
 
 	if err := startBgpServer(peerAddress); err != nil {
-		log.Errorf("Starting BGP server failed: %v", err)
+		log.Errorf("Failed to start BGP server: %v", err)
 		return
 	}
 
