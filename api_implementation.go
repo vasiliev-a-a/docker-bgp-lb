@@ -139,7 +139,7 @@ func (d *bgpLB) CreateEndpoint(r *api.CreateEndpointRequest) (*api.CreateEndpoin
 	resp := &api.CreateEndpointResponse{}
 
 	// Start Goroutine which will add local and BGP routes after container is up and running.
-	go addRoute(r.NetworkID, r.EndpointID, r.Interface.Address, r.Interface.AddressIPv6)
+	go addRoute(d.ctx, r.NetworkID, r.EndpointID, r.Interface.Address, r.Interface.AddressIPv6)
 
 	return resp, nil
 }

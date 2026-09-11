@@ -10,13 +10,23 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var driverScope = "local"
 var lbServer *bgpLB
 var log = &logrus.Logger{}
 var scs = spew.ConfigState{Indent: "  "}
 var stateFile = "/bgplb.json"
 
 func main() {
+	// [os.Exit] skips all other deferred calls,
+	// so this defer — registered first and therefore run last,
+	// after `cancel()` and `dockerClient.Close()` have completed.
+	// On the success path `exitCode` stays 0 and [main] returns normally.
+	exitCode := 0
+	defer func() {
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+	}()
+
 	log = &logrus.Logger{
 		Out:   os.Stdout,
 		Level: logrus.DebugLevel,
@@ -30,6 +40,7 @@ func main() {
 	defer cancel()
 
 	if err := initDockerClient(ctx); err != nil {
+		exitCode = 1
 		log.Errorf("Failed to setup a Docker client: %v", err)
 		return
 	}
@@ -37,58 +48,32 @@ func main() {
 
 	peerAddress := os.Getenv("PEER_ADDRESS")
 	if peerAddress == "" {
+		exitCode = 1
 		log.Error("Environment variable PEER_ADDRESS is required")
 		return
 	}
 
 	if net.ParseIP(peerAddress) == nil {
+		exitCode = 1
 		log.Errorf("Failed to parse PEER_ADDRESS=%s as IP address", peerAddress)
 		return
 	}
 
 	if err := startBgpServer(peerAddress); err != nil {
+		exitCode = 1
 		log.Errorf("Failed to start BGP server: %v", err)
 		return
 	}
 
-	if os.Getenv("GLOBAL_SCOPE") == "true" {
-		driverScope = "global"
-	}
-
 	log.Infof("Starting Docker BGP LB Plugin")
 
-	lbServer = &bgpLB{
-		advertisedNetworks: make(map[string]*advertisedNetwork),
-		scope:              driverScope,
-	}
+	lbServer = initLBServer(ctx)
 	go advertiseNetworksOnStart(ctx)
 	go watchDockerEvents(ctx)
-	// Load saves networks configuration but only when we are not running in swarm mode.
-	// This is because swarm will automatically create/remove networks when needed.
-	lbServer.Lock()
-	if driverScope == "global" {
-		log.Info("Running in Swarm mode, starting with an empty configuration.")
-		lbServer.Networks = make(map[string]*bgpNetwork)
-	} else {
-		d, err := loadState()
-		if err != nil {
-			log.Info("Failed to load data, starting with an empty configuration.")
-			lbServer.Networks = make(map[string]*bgpNetwork)
-		} else {
-			lbServer.Networks = d.Networks
-		}
-	}
-
-	for id, network := range lbServer.Networks {
-		if err := createBridgeFromNetID(id); err != nil {
-			log.Printf("Failed to create bridge for network %s: %v", id, err)
-		}
-		network.endpoints = make(map[string]*bgpLBEndpoint)
-	}
-	lbServer.Unlock()
 
 	h := api.NewHandler(lbServer)
 	if err := h.ServeUnix("bgplb", 0); err != nil {
+		exitCode = 1
 		log.Errorf("ServeUnix failed: %v", err)
 		return
 	}

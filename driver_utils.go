@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -19,8 +20,13 @@ func (lb *bgpLB) saveState() error {
 func loadState() (*bgpLB, error) {
 	data, err := os.ReadFile(stateFile)
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		// The state file does not exist yet - first run. Not an error.
+		return &bgpLB{Networks: make(map[string]*bgpNetwork)}, nil
 	}
+
 	var b bgpLB
 	if err := json.Unmarshal(data, &b); err != nil {
 		return nil, err
@@ -31,7 +37,8 @@ func loadState() (*bgpLB, error) {
 		b.Networks = make(map[string]*bgpNetwork)
 	}
 
-	b.scope = driverScope
+	// Only `Networks` is restored; `ctx` and `scope` are runtime concerns
+	// set by [initLBServer] (they are unexported and never persisted).
 	return &b, nil
 }
 

@@ -79,8 +79,8 @@ func startBgpServer(peerAddress string) error {
 	return nil
 }
 
-func addRoute(NetworkID, EndpointID, ipv4, ipv6 string) {
-	if running := waitContainerHealthy(context.TODO(), NetworkID, EndpointID); running == false {
+func addRoute(ctx context.Context, NetworkID, EndpointID, ipv4, ipv6 string) {
+	if running := waitContainerHealthy(ctx, NetworkID, EndpointID); running == false {
 		return
 	}
 
