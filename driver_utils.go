@@ -80,6 +80,15 @@ func (lb *bgpLB) isEndpointManaged(networkID, endpointID string) bool {
 	return epOk
 }
 
+func isNetworkAdvertised(netID string) bool {
+	lbServer.advertisedNetworksMu.Lock()
+	defer lbServer.advertisedNetworksMu.Unlock()
+
+	_, ok := lbServer.advertisedNetworks[netID]
+
+	return ok
+}
+
 func addAdvertisedSubnet(ctx context.Context, netID, subnet string) error {
 	advNetwork := &advertisedNetwork{}
 

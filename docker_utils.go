@@ -301,6 +301,10 @@ func handleDockerNetworkCreate(ctx context.Context, event *events.Message) {
 }
 
 func handleDockerNetworkDestroy(ctx context.Context, event *events.Message) {
+	if !isNetworkAdvertised(event.Actor.ID) {
+		// No-op if the network is not advertised.
+		return
+	}
 	log := log.WithField("network.id", event.Actor.ID)
 	if err := delAdvertisedNetwork(ctx, event.Actor.ID); err == nil {
 		log.Info("handleDockerNetworkDestroy: removed the advertised network")
