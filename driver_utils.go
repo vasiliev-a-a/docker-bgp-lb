@@ -9,14 +9,6 @@ import (
 	"slices"
 )
 
-func (lb *bgpLB) saveState() error {
-	data, err := json.Marshal(lb)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(stateFile, data, 0644)
-}
-
 func loadState() (*bgpLB, error) {
 	data, err := os.ReadFile(stateFile)
 	if err != nil {
@@ -42,21 +34,67 @@ func loadState() (*bgpLB, error) {
 	return &b, nil
 }
 
+// lockState locks the persistable state of the plugin (the networks and their endpoints).
+// It returns a function to unlock it, which must be called after the caller is done with the state.
+// Primary use case is to ensure that the state is not modified while it is being saved to disk.
+// Must never be called while holding a network mutex ([sync.Mutex] is not reentrant).
+func (lb *bgpLB) lockState() func() {
+	lb.networksMu.Lock()
+	for i := range lb.Networks {
+		lb.Networks[i].Lock()
+	}
+
+	return func() {
+		for i := range lb.Networks {
+			lb.Networks[i].Unlock()
+		}
+		lb.networksMu.Unlock()
+	}
+}
+
+func (lb *bgpLB) saveState() error {
+	unlock := lb.lockState()
+	defer unlock()
+
+	data, err := json.Marshal(lb)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(stateFile, data, 0644)
+}
+
+func (lb *bgpLB) isEndpointManaged(networkID, endpointID string) bool {
+	lb.networksMu.Lock()
+
+	bgpNetwork, netOk := lb.Networks[networkID]
+	if !netOk {
+		lb.networksMu.Unlock()
+		return false
+	}
+	bgpNetwork.Lock()
+	defer bgpNetwork.Unlock()
+	lb.networksMu.Unlock()
+
+	_, epOk := bgpNetwork.endpoints[endpointID]
+
+	return epOk
+}
+
 func addAdvertisedSubnet(ctx context.Context, netID, subnet string) error {
 	advNetwork := &advertisedNetwork{}
 
-	lbServer.Lock()
+	lbServer.advertisedNetworksMu.Lock()
 	if n, ok := lbServer.advertisedNetworks[netID]; !ok {
 		lbServer.advertisedNetworks[netID] = advNetwork
 	} else {
 		advNetwork = n
 	}
-	lbServer.Unlock()
+	lbServer.advertisedNetworksMu.Unlock()
 
 	advNetwork.Lock()
 	if slices.Contains(advNetwork.subnets, subnet) {
 		advNetwork.Unlock()
-		return fmt.Errorf("addAdvertisedSubnet: the subnet '%s' is already advertised", subnet)
+		return fmt.Errorf("the subnet '%s' is already advertised", subnet)
 	}
 	// Reserve the subnet before the external call.
 	advNetwork.subnets = append(advNetwork.subnets, subnet)
@@ -71,7 +109,7 @@ func addAdvertisedSubnet(ctx context.Context, netID, subnet string) error {
 				advNetwork.subnets = slices.Delete(advNetwork.subnets, idx, idx+1)
 			}
 			advNetwork.Unlock()
-			return fmt.Errorf("addAdvertisedSubnet: failed to advertise the subnet: %w", err)
+			return fmt.Errorf("advertise the subnet %s: %w", subnet, err)
 		}
 	}
 
@@ -79,14 +117,14 @@ func addAdvertisedSubnet(ctx context.Context, netID, subnet string) error {
 }
 
 func delAdvertisedNetwork(ctx context.Context, netID string) error {
-	lbServer.Lock()
+	lbServer.advertisedNetworksMu.Lock()
 
 	advNetwork, ok := lbServer.advertisedNetworks[netID]
 	if !ok {
-		lbServer.Unlock()
+		lbServer.advertisedNetworksMu.Unlock()
 		return fmt.Errorf("network %s is not advertised", netID)
 	}
-	lbServer.Unlock()
+	lbServer.advertisedNetworksMu.Unlock()
 
 	advNetwork.Lock()
 	subnets := append([]string(nil), advNetwork.subnets...)
@@ -95,13 +133,13 @@ func delAdvertisedNetwork(ctx context.Context, netID string) error {
 	for _, subnet := range subnets {
 		if isPrefixAdvertised(ctx, subnet) {
 			if err := withdrawPrefix(ctx, subnet); err != nil {
-				return fmt.Errorf("withdraw subnet %s: %w", subnet, err)
+				return fmt.Errorf("withdraw the subnet %s: %w", subnet, err)
 			}
 		}
 	}
 
-	lbServer.Lock()
+	lbServer.advertisedNetworksMu.Lock()
 	delete(lbServer.advertisedNetworks, netID)
-	lbServer.Unlock()
+	lbServer.advertisedNetworksMu.Unlock()
 	return nil
 }

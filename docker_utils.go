@@ -97,7 +97,7 @@ func getContainerByEndpointID(ctx context.Context, networkID, endpointID string)
 	return "", fmt.Errorf("endpoint %s not found on network %s", endpointID, networkID)
 }
 
-func waitContainerHealthy(ctx context.Context, networkID, endpointID string) bool {
+func waitEndpointReady(ctx context.Context, networkID, endpointID string) bool {
 	log := log.WithField("network.id", networkID).WithField("endpoint.id", endpointID)
 
 	// Set up backoff configuration and initial delay.
@@ -107,14 +107,19 @@ func waitContainerHealthy(ctx context.Context, networkID, endpointID string) boo
 	for {
 		select {
 		case <-ctx.Done():
-			log.Warnf("waitContainerHealthy: operation is canceled: %v", context.Cause(ctx))
+			log.Warnf("waitEndpointReady: operation is canceled: %v", context.Cause(ctx))
 			return false
 
 		case <-time.After(delay):
+			if !lbServer.isEndpointManaged(networkID, endpointID) {
+				log.Warn("waitEndpointReady: endpoint is no longer managed by the plugin")
+				return false
+			}
+
 			containerID, err := getContainerByEndpointID(ctx, networkID, endpointID)
 			if err != nil {
 				delay = backoffConfig.NextBackOff()
-				log.Warnf("waitContainerHealthy: failed to find the container for endpoint: %v. Retrying in %s", err, delay)
+				log.Warnf("waitEndpointReady: failed to find the container for endpoint: %v. Retrying in %s", err, delay)
 				continue
 			}
 			containerLog := log.WithField("container.id", containerID)
@@ -122,14 +127,14 @@ func waitContainerHealthy(ctx context.Context, networkID, endpointID string) boo
 			container, err := dockerClient.ContainerInspect(ctx, containerID)
 			if err != nil {
 				delay = backoffConfig.NextBackOff()
-				containerLog.Warnf("waitContainerHealthy: failed to get container details from Docker: %v. Retrying in %s", err, delay)
+				containerLog.Warnf("waitEndpointReady: failed to get container details from Docker: %v. Retrying in %s", err, delay)
 				continue
 			}
 			containerLog = containerLog.WithField("container.name", container.Name)
 
 			if container.State == nil {
 				delay = backoffConfig.NextBackOff()
-				containerLog.Warnf("waitContainerHealthy: container state is not yet settled. Retrying in %s", delay)
+				containerLog.Warnf("waitEndpointReady: container state is not yet settled. Retrying in %s", delay)
 				continue
 			}
 
@@ -139,19 +144,19 @@ func waitContainerHealthy(ctx context.Context, networkID, endpointID string) boo
 			// Only containers without a healthcheck settle on the `Running` state.
 			if container.State.Health != nil {
 				if container.State.Health.Status == "healthy" {
-					containerLog.Info("waitContainerHealthy: container is healthy")
+					containerLog.Info("waitEndpointReady: container is healthy")
 					return true
 				}
 				stateHealth = container.State.Health.Status
 			} else {
 				if container.State.Running {
-					containerLog.Info("waitContainerHealthy: container is running")
+					containerLog.Info("waitEndpointReady: container is running")
 					return true
 				}
 			}
 
 			delay = backoffConfig.NextBackOff()
-			containerLog.Warnf("waitContainerHealthy: container is not ready (health=%s, status=%s). Retrying in %s", stateHealth, container.State.Status, delay)
+			containerLog.Warnf("waitEndpointReady: container is not ready (health=%s, status=%s). Retrying in %s", stateHealth, container.State.Status, delay)
 		}
 	}
 }

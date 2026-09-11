@@ -4,15 +4,19 @@ import (
 	"context"
 	"os"
 	"sync"
+
+	"github.com/olljanat/docker-bgp-lb/api"
 )
 
 type bgpLBEndpoint struct {
-	vethInside  string
-	vethOutside string
+	endpointInterface *api.EndpointInterface
+	vethInside        string
+	vethOutside       string
 }
 
 type bgpNetwork struct {
 	endpoints map[string]*bgpLBEndpoint
+	sync.Mutex
 }
 
 type advertisedNetwork struct {
@@ -21,14 +25,15 @@ type advertisedNetwork struct {
 }
 
 type bgpLB struct {
-	Networks map[string]*bgpNetwork
+	Networks   map[string]*bgpNetwork
+	networksMu sync.Mutex
 
-	advertisedNetworks map[string]*advertisedNetwork
+	advertisedNetworks   map[string]*advertisedNetwork
+	advertisedNetworksMu sync.Mutex
 	// ctx is the plugin's lifetime context,
 	// used for background route operations.
 	ctx   context.Context
 	scope string
-	sync.Mutex
 }
 
 func initLBServer(ctx context.Context) *bgpLB {

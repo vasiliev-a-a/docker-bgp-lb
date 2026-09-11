@@ -70,14 +70,15 @@ func (d *bgpLB) ReleasePool(r *api.ReleasePoolRequest) error {
 }
 
 func (d *bgpLB) CreateNetwork(r *api.CreateNetworkRequest) error {
-	d.Lock()
-	defer d.Unlock()
+	d.networksMu.Lock()
 
 	if _, ok := d.Networks[r.NetworkID]; ok {
+		d.networksMu.Unlock()
 		return types.ForbiddenErrorf("network %s already exists", r.NetworkID)
 	}
 
 	if err := createBridgeFromNetID(r.NetworkID); err != nil {
+		d.networksMu.Unlock()
 		return types.InternalErrorf("create bridge for network %s: %v", r.NetworkID, err)
 	}
 
@@ -86,6 +87,7 @@ func (d *bgpLB) CreateNetwork(r *api.CreateNetworkRequest) error {
 	}
 
 	d.Networks[r.NetworkID] = bgpNetwork
+	d.networksMu.Unlock()
 
 	if err := d.saveState(); err != nil {
 		return types.InternalErrorf("save plugin state: %v", err)
@@ -95,20 +97,21 @@ func (d *bgpLB) CreateNetwork(r *api.CreateNetworkRequest) error {
 }
 
 func (d *bgpLB) DeleteNetwork(r *api.DeleteNetworkRequest) error {
-	d.Lock()
-	defer d.Unlock()
+	d.networksMu.Lock()
 
-	// Skip if not in map.
 	if _, ok := d.Networks[r.NetworkID]; !ok {
+		d.networksMu.Unlock()
 		return nil
 	}
 
 	err := deleteBridge(r.NetworkID)
 	if err != nil {
+		d.networksMu.Unlock()
 		return types.InternalErrorf("cleanup network %s: %v", r.NetworkID, err)
 	}
 
 	delete(d.Networks, r.NetworkID)
+	d.networksMu.Unlock()
 
 	if err := d.saveState(); err != nil {
 		return types.InternalErrorf("save plugin state: %v", err)
@@ -126,15 +129,18 @@ func (d *bgpLB) FreeNetwork(r *api.FreeNetworkRequest) error {
 }
 
 func (d *bgpLB) CreateEndpoint(r *api.CreateEndpointRequest) (*api.CreateEndpointResponse, error) {
-	d.Lock()
-	defer d.Unlock()
+	d.networksMu.Lock()
 
-	// Throw error if not in map.
-	if _, ok := d.Networks[r.NetworkID]; !ok {
+	bgpNetwork, ok := d.Networks[r.NetworkID]
+	if !ok {
+		d.networksMu.Unlock()
 		return nil, types.NotFoundErrorf("network %s does not exist", r.NetworkID)
 	}
+	bgpNetwork.Lock()
+	defer bgpNetwork.Unlock()
+	d.networksMu.Unlock()
 
-	d.Networks[r.NetworkID].endpoints[r.EndpointID] = &bgpLBEndpoint{}
+	bgpNetwork.endpoints[r.EndpointID] = &bgpLBEndpoint{endpointInterface: r.Interface}
 
 	resp := &api.CreateEndpointResponse{}
 
@@ -145,42 +151,53 @@ func (d *bgpLB) CreateEndpoint(r *api.CreateEndpointRequest) (*api.CreateEndpoin
 }
 
 func (d *bgpLB) DeleteEndpoint(r *api.DeleteEndpointRequest) error {
-	d.Lock()
-	defer d.Unlock()
+	d.networksMu.Lock()
 
-	// Skip if not in map (both network and endpoint).
-	if _, netOk := d.Networks[r.NetworkID]; !netOk {
+	bgpNetwork, netOk := d.Networks[r.NetworkID]
+	if !netOk {
+		d.networksMu.Unlock()
+		return nil
+	}
+	bgpNetwork.Lock()
+	defer bgpNetwork.Unlock()
+	d.networksMu.Unlock()
+
+	if _, epOk := bgpNetwork.endpoints[r.EndpointID]; !epOk {
 		return nil
 	}
 
-	if _, epOk := d.Networks[r.NetworkID].endpoints[r.EndpointID]; !epOk {
-		return nil
-	}
-
-	delete(d.Networks[r.NetworkID].endpoints, r.EndpointID)
+	delete(bgpNetwork.endpoints, r.EndpointID)
 
 	return nil
 }
 
 func (d *bgpLB) EndpointInfo(r *api.InfoRequest) (*api.InfoResponse, error) {
-	d.Lock()
-	defer d.Unlock()
+	d.networksMu.Lock()
 
-	// Throw error if not in map (both network and endpoint).
-	if _, netOk := d.Networks[r.NetworkID]; !netOk {
+	bgpNetwork, netOk := d.Networks[r.NetworkID]
+	if !netOk {
+		d.networksMu.Unlock()
 		return nil, types.NotFoundErrorf("network %s does not exist", r.NetworkID)
 	}
+	bgpNetwork.Lock()
+	defer bgpNetwork.Unlock()
+	d.networksMu.Unlock()
 
-	if _, epOk := d.Networks[r.NetworkID].endpoints[r.EndpointID]; !epOk {
+	if _, epOk := bgpNetwork.endpoints[r.EndpointID]; !epOk {
 		return nil, types.NotFoundErrorf("endpoint %s does not exist in network %s", r.EndpointID, r.NetworkID)
 	}
 
-	endpointInfo := d.Networks[r.NetworkID].endpoints[r.EndpointID]
 	value := make(map[string]string)
 
-	value["ip_address"] = ""
-	value["mac_address"] = ""
-	value["veth_outside"] = endpointInfo.vethOutside
+	endpointInfo := bgpNetwork.endpoints[r.EndpointID]
+	if endpointInfo != nil {
+		value["veth_outside"] = endpointInfo.vethOutside
+	}
+	if endpointInfo.endpointInterface != nil {
+		value["ipv4_address"] = endpointInfo.endpointInterface.Address
+		value["ipv6_address"] = endpointInfo.endpointInterface.AddressIPv6
+		value["mac_address"] = endpointInfo.endpointInterface.MacAddress
+	}
 
 	resp := &api.InfoResponse{
 		Value: value,
@@ -190,15 +207,18 @@ func (d *bgpLB) EndpointInfo(r *api.InfoRequest) (*api.InfoResponse, error) {
 }
 
 func (d *bgpLB) Join(r *api.JoinRequest) (*api.JoinResponse, error) {
-	d.Lock()
-	defer d.Unlock()
+	d.networksMu.Lock()
 
-	// Throw error if not in map (both network and endpoint).
-	if _, netOk := d.Networks[r.NetworkID]; !netOk {
+	bgpNetwork, netOk := d.Networks[r.NetworkID]
+	if !netOk {
+		d.networksMu.Unlock()
 		return nil, types.NotFoundErrorf("network %s does not exist", r.NetworkID)
 	}
+	bgpNetwork.Lock()
+	defer bgpNetwork.Unlock()
+	d.networksMu.Unlock()
 
-	if _, epOk := d.Networks[r.NetworkID].endpoints[r.EndpointID]; !epOk {
+	if _, epOk := bgpNetwork.endpoints[r.EndpointID]; !epOk {
 		return nil, types.NotFoundErrorf("endpoint %s does not exist in network %s", r.EndpointID, r.NetworkID)
 	}
 
@@ -221,8 +241,8 @@ func (d *bgpLB) Join(r *api.JoinRequest) (*api.JoinResponse, error) {
 		return nil, types.InternalErrorf("join endpoint %s to network %s: %v", r.EndpointID, r.NetworkID, err)
 	}
 
-	d.Networks[r.NetworkID].endpoints[r.EndpointID].vethInside = vethInside
-	d.Networks[r.NetworkID].endpoints[r.EndpointID].vethOutside = vethOutside
+	bgpNetwork.endpoints[r.EndpointID].vethInside = vethInside
+	bgpNetwork.endpoints[r.EndpointID].vethOutside = vethOutside
 
 	resp := &api.JoinResponse{
 		InterfaceName: api.InterfaceName{
@@ -235,21 +255,24 @@ func (d *bgpLB) Join(r *api.JoinRequest) (*api.JoinResponse, error) {
 }
 
 func (d *bgpLB) Leave(r *api.LeaveRequest) error {
-	d.Lock()
-	defer d.Unlock()
+	d.networksMu.Lock()
 
-	// Throw error if not in map (both network and endpoint).
-	if _, netOk := d.Networks[r.NetworkID]; !netOk {
+	bgpNetwork, netOk := d.Networks[r.NetworkID]
+	if !netOk {
+		d.networksMu.Unlock()
 		return types.NotFoundErrorf("network %s does not exist", r.NetworkID)
 	}
+	bgpNetwork.Lock()
+	defer bgpNetwork.Unlock()
+	d.networksMu.Unlock()
 
-	if _, epOk := d.Networks[r.NetworkID].endpoints[r.EndpointID]; !epOk {
+	if _, epOk := bgpNetwork.endpoints[r.EndpointID]; !epOk {
 		return types.NotFoundErrorf("endpoint %s does not exist in network %s", r.EndpointID, r.NetworkID)
 	}
 
 	delRoute(r.NetworkID, r.EndpointID)
 
-	endpointInfo := d.Networks[r.NetworkID].endpoints[r.EndpointID]
+	endpointInfo := bgpNetwork.endpoints[r.EndpointID]
 
 	if err := deleteVethPair(endpointInfo.vethOutside); err != nil {
 		return types.InternalErrorf("remove endpoint %s from network %s: %v", r.EndpointID, r.NetworkID, err)
