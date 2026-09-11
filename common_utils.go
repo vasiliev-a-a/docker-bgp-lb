@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/cenkalti/backoff/v4"
 )
 
 func generateMacAddressFromID(macAddressID string) string {
@@ -29,6 +32,18 @@ func generateMacAddressFromID(macAddressID string) string {
 	return strings.Join(macAddressString, ":")
 }
 
+// newBackoff returns an exponential backoff where the context is the only
+// limiting factor (MaxElapsedTime is disabled).
+func newBackoff(initial time.Duration, multiplier, randomization float64, max time.Duration) *backoff.ExponentialBackOff {
+	return backoff.NewExponentialBackOff(
+		backoff.WithInitialInterval(initial),
+		backoff.WithMultiplier(multiplier),
+		backoff.WithRandomizationFactor(randomization),
+		backoff.WithMaxInterval(max),
+		backoff.WithMaxElapsedTime(0),
+	)
+}
+
 func truncate(s string, n int) string {
 	if n <= 0 {
 		return ""
@@ -42,6 +57,6 @@ func truncate(s string, n int) string {
 		i++
 	}
 
-	// If we reach here, it means the string is shorter than n, so we return the original string
+	// If we reach here, it means the string is shorter than n, so we return the original string.
 	return s
 }

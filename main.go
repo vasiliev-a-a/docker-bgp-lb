@@ -29,6 +29,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	if err := initDockerClient(ctx); err != nil {
+		log.Errorf("Failed to setup a Docker client: %v", err)
+		return
+	}
+	defer dockerClient.Close()
+
 	peerAddress := os.Getenv("PEER_ADDRESS")
 	if peerAddress == "" {
 		log.Error("Environment variable PEER_ADDRESS is required")
