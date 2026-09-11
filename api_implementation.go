@@ -213,6 +213,11 @@ func (d *bgpLB) Join(r *api.JoinRequest) (*api.JoinResponse, error) {
 	}
 
 	if err := attachInterfaceToBridge(bridgeName, vethOutside); err != nil {
+		// Best effort to cleanup the orphaned veth interfaces.
+		if err := deleteVethPair(vethOutside); err != nil {
+			log.WithField("network.id", r.NetworkID).WithField("endpoint.id", r.EndpointID).Warnf("Failed to cleanup the veth interface %s: %v", vethOutside, err)
+		}
+
 		return nil, types.InternalErrorf("join endpoint %s to network %s: %v", r.EndpointID, r.NetworkID, err)
 	}
 
