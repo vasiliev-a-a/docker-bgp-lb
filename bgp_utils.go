@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -97,23 +98,61 @@ func addRoute(ctx context.Context, NetworkID, EndpointID, ipv4, ipv6 string) {
 		log.Errorf("addRoute: failed to get bridge interface for network: %v", err)
 		return
 	}
-	if ipv4 != "" {
-		ip, ipv4Dst, _ := net.ParseCIDR(ipv4)
-		if ip.String() != "0.0.0.0" {
-			log.Infof("addRoute: Adding IPv4 route to %s", ipv4Dst)
-			route := netlink.Route{Dst: ipv4Dst, LinkIndex: bridge.Attrs().Index}
-			netlink.RouteAdd(&route)
 
-			addBgpRoute(ip.String(), 32, apiGoBGP.Family_AFI_IP)
+	// If installation of a local route fails, we return fast since we could not process incoming traffic.
+
+	if ipv4 != "" {
+		ip, ipv4Dst, err := net.ParseCIDR(ipv4)
+		if err != nil {
+			log.Errorf("addRoute: failed to parse %s as network prefix: %v", ipv4, err)
+			return
+		}
+
+		if ip.String() != "0.0.0.0" {
+			route := netlink.Route{Dst: ipv4Dst, LinkIndex: bridge.Attrs().Index}
+
+			if err := netlink.RouteAdd(&route); err != nil && !errors.Is(err, os.ErrExist) {
+				log.Errorf("addRoute: failed to install local route to %s: %v", ipv4Dst.String(), err)
+				return
+			}
+			if errors.Is(err, os.ErrExist) {
+				log.Infof("addRoute: local route to %s is already present", ipv4Dst.String())
+			} else {
+				log.Infof("addRoute: installed local route to %s", ipv4Dst.String())
+			}
+
+			if err := addBgpRoute(ip.String(), 32, apiGoBGP.Family_AFI_IP); err != nil {
+				log.Errorf("addRoute: failed to install BGP route to %s: %v", ipv4Dst.String(), err)
+				return
+			}
+			log.Infof("addRoute: installed BGP route to %s", ipv4Dst.String())
 		}
 	}
-	if ipv6 != "" {
-		ip, ipv6Dst, _ := net.ParseCIDR(ipv6)
-		log.Infof("addRoute: Adding IPv6 route to %s", ipv6Dst)
-		route := netlink.Route{Dst: ipv6Dst, LinkIndex: bridge.Attrs().Index}
-		netlink.RouteAdd(&route)
 
-		addBgpRoute(ip.String(), 128, apiGoBGP.Family_AFI_IP6)
+	if ipv6 != "" {
+		ip, ipv6Dst, err := net.ParseCIDR(ipv6)
+		if err != nil {
+			log.Errorf("addRoute: failed to parse %s as network prefix: %v", ipv6, err)
+			return
+		}
+
+		route := netlink.Route{Dst: ipv6Dst, LinkIndex: bridge.Attrs().Index}
+
+		if err := netlink.RouteAdd(&route); err != nil && !errors.Is(err, os.ErrExist) {
+			log.Errorf("addRoute: failed to install local route to %s: %v", ipv6Dst.String(), err)
+			return
+		}
+		if errors.Is(err, os.ErrExist) {
+			log.Infof("addRoute: local route to %s is already present", ipv6Dst.String())
+		} else {
+			log.Infof("addRoute: installed local route to %s", ipv6Dst.String())
+		}
+
+		if err := addBgpRoute(ip.String(), 128, apiGoBGP.Family_AFI_IP6); err != nil {
+			log.Errorf("addRoute: failed to install BGP route to %s: %v", ipv6Dst.String(), err)
+			return
+		}
+		log.Infof("addRoute: installed BGP route to %s", ipv6Dst.String())
 	}
 }
 
@@ -161,26 +200,43 @@ func delRoute(NetworkID, EndpointID string) {
 		return
 	}
 
+	// Deletion of routes is performed on a best effort base.
+	// Since we do not return any error, we can not affect upstream routines.
+	// We only log every failure.
+
 	v4routes, err := netlink.RouteList(bridge, netlink.FAMILY_V4)
 	if err != nil {
 		log.Errorf("delRoute: failed to get local IPv4 routes: %v", err)
 	}
 	for _, v4route := range v4routes {
 		v4dst := &v4route.Dst.IP
-		delBgpRoute(v4dst.String(), 32, apiGoBGP.Family_AFI_IP)
+		if err := delBgpRoute(v4dst.String(), 32, apiGoBGP.Family_AFI_IP); err != nil {
+			log.Errorf("delRoute: failed to remove BGP route to %s: %v", v4dst.String(), err)
+		} else {
+			log.Infof("delRoute: removed BGP route to %s", v4dst.String())
+		}
 		if err := netlink.RouteDel(&v4route); err != nil {
-			log.Errorf("delRoute: failed to remove local route to: %v , Error: %v", v4dst.String(), err)
+			log.Errorf("delRoute: failed to remove local route to %s: %v", v4dst.String(), err)
+		} else {
+			log.Infof("delRoute: removed local route to %s", v4dst.String())
 		}
 	}
+
 	v6routes, err := netlink.RouteList(bridge, netlink.FAMILY_V6)
 	if err != nil {
 		log.Errorf("delRoute: failed to get local IPv6 routes: %v", err)
 	}
 	for _, v6route := range v6routes {
 		v6dst := &v6route.Dst.IP
-		delBgpRoute(v6dst.String(), 128, apiGoBGP.Family_AFI_IP6)
+		if err := delBgpRoute(v6dst.String(), 128, apiGoBGP.Family_AFI_IP6); err != nil {
+			log.Errorf("delRoute: failed to remove BGP route to %s: %v", v6dst.String(), err)
+		} else {
+			log.Infof("delRoute: removed BGP route to %s", v6dst.String())
+		}
 		if err := netlink.RouteDel(&v6route); err != nil {
-			log.Errorf("delRoute: failed to remove local route to: %v , Error: %v", v6dst.String(), err)
+			log.Errorf("delRoute: failed to remove local route to %s: %v", v6dst.String(), err)
+		} else {
+			log.Infof("delRoute: removed local route to %s", v6dst.String())
 		}
 	}
 }
@@ -219,10 +275,10 @@ func delBgpRoute(prefix string, mask int, ipFamily apiGoBGP.Family_Afi) error {
 	return nil
 }
 
-func isPrefixAdvertised(ctx context.Context, prefix string) bool {
+func isPrefixAdvertised(ctx context.Context, prefix string) (bool, error) {
 	_, ipnet, err := net.ParseCIDR(prefix)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("parse %s as network prefix: %w", prefix, err)
 	}
 
 	var counter int
@@ -236,15 +292,17 @@ func isPrefixAdvertised(ctx context.Context, prefix string) bool {
 		request.Family.Afi = apiGoBGP.Family_AFI_IP6
 	}
 
-	bgpServer.ListPath(ctx, request, callback)
+	if err := bgpServer.ListPath(ctx, request, callback); err != nil {
+		return false, fmt.Errorf("lookup BGP paths: %w", err)
+	}
 
-	return counter > 0
+	return counter > 0, nil
 }
 
 func advertisePrefix(ctx context.Context, prefix string) error {
 	_, ipnet, err := net.ParseCIDR(prefix)
 	if err != nil {
-		return fmt.Errorf("advertisePrefix: failed to parse the prefix: %w", err)
+		return fmt.Errorf("parse %s as network prefix: %w", prefix, err)
 	}
 
 	mask, _ := ipnet.Mask.Size()
@@ -280,7 +338,7 @@ func advertisePrefix(ctx context.Context, prefix string) error {
 			Pattrs: attrs,
 		},
 	}); err != nil {
-		return fmt.Errorf("advertisePrefix: failed to add the prefix: %w", err)
+		return fmt.Errorf("add BGP path: %w", err)
 	}
 
 	return nil
@@ -289,7 +347,7 @@ func advertisePrefix(ctx context.Context, prefix string) error {
 func withdrawPrefix(ctx context.Context, prefix string) error {
 	_, ipnet, err := net.ParseCIDR(prefix)
 	if err != nil {
-		return fmt.Errorf("withdrawPrefix: failed to parse the prefix: %w", err)
+		return fmt.Errorf("parse %s as network prefix: %w", prefix, err)
 	}
 
 	mask, _ := ipnet.Mask.Size()
@@ -327,7 +385,7 @@ func withdrawPrefix(ctx context.Context, prefix string) error {
 		TableType: apiGoBGP.TableType_GLOBAL,
 		Path:      p1,
 	}); err != nil {
-		return fmt.Errorf("withdrawPrefix: failed to delete the prefix: %w", err)
+		return fmt.Errorf("delete BGP path: %w", err)
 	}
 
 	return nil

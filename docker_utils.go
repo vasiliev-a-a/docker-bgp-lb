@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -68,7 +70,9 @@ func advertiseNetworksOnStart(ctx context.Context) {
 					if err := addAdvertisedSubnet(ctx, dockerNetwork.ID, ipam.Subnet); err == nil {
 						log.WithField("subnet", ipam.Subnet).Info("advertiseNetworksOnStart: advertising the subnet")
 					} else {
-						log.WithField("subnet", ipam.Subnet).Errorf("advertiseNetworksOnStart: failed to advertise the subnet: %v", err)
+						if !errors.Is(err, ErrSubnetAlreadyAdvertised) {
+							log.WithField("subnet", ipam.Subnet).Errorf("advertiseNetworksOnStart: failed to advertise the subnet: %v", err)
+						}
 					}
 				}
 			}
@@ -81,20 +85,24 @@ func advertiseNetworksOnStart(ctx context.Context) {
 func getContainerByEndpointID(ctx context.Context, networkID, endpointID string) (string, error) {
 	dockerNetwork, err := dockerClient.NetworkInspect(ctx, networkID, types.NetworkInspectOptions{})
 	if err != nil {
-		return "", fmt.Errorf("inspect network %s: %w", networkID, err)
+		return "", fmt.Errorf("inspect network: %w", err)
 	}
 
 	if len(dockerNetwork.Containers) == 0 {
-		return "", fmt.Errorf("no containers found on network %s", networkID)
+		return "", fmt.Errorf("network has no containers")
 	}
 
 	for containerID, endpoint := range dockerNetwork.Containers {
+		if strings.HasPrefix(containerID, "ep-") {
+			// Placeholder entry: the endpoint is not attached to a container yet.
+			continue
+		}
 		if endpoint.EndpointID == endpointID {
 			return containerID, nil
 		}
 	}
 
-	return "", fmt.Errorf("endpoint %s not found on network %s", endpointID, networkID)
+	return "", fmt.Errorf("endpoint not found on network")
 }
 
 func waitEndpointReady(ctx context.Context, networkID, endpointID string) bool {
@@ -119,7 +127,7 @@ func waitEndpointReady(ctx context.Context, networkID, endpointID string) bool {
 			containerID, err := getContainerByEndpointID(ctx, networkID, endpointID)
 			if err != nil {
 				delay = backoffConfig.NextBackOff()
-				log.Warnf("waitEndpointReady: failed to find the container for endpoint: %v. Retrying in %s", err, delay)
+				log.Warnf("waitEndpointReady: failed to lookup the container: %v. Retrying in %s", err, delay)
 				continue
 			}
 			containerLog := log.WithField("container.id", containerID)
@@ -294,7 +302,9 @@ func handleDockerNetworkCreate(ctx context.Context, event *events.Message) {
 			if err := addAdvertisedSubnet(ctx, network.ID, ipam.Subnet); err == nil {
 				log.WithField("subnet", ipam.Subnet).Info("handleDockerNetworkCreate: advertising the subnet")
 			} else {
-				log.WithField("subnet", ipam.Subnet).Errorf("handleDockerNetworkCreate: failed to advertise the subnet: %v", err)
+				if !errors.Is(err, ErrSubnetAlreadyAdvertised) {
+					log.WithField("subnet", ipam.Subnet).Errorf("handleDockerNetworkCreate: failed to advertise the subnet: %v", err)
+				}
 			}
 		}
 	}

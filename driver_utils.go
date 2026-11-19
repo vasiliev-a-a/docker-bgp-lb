@@ -7,6 +7,11 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
+)
+
+var (
+	ErrSubnetAlreadyAdvertised = errors.New("subnet is already advertised")
 )
 
 func loadState() (*bgpLB, error) {
@@ -103,13 +108,24 @@ func addAdvertisedSubnet(ctx context.Context, netID, subnet string) error {
 	advNetwork.Lock()
 	if slices.Contains(advNetwork.subnets, subnet) {
 		advNetwork.Unlock()
-		return fmt.Errorf("the subnet '%s' is already advertised", subnet)
+		return ErrSubnetAlreadyAdvertised
 	}
 	// Reserve the subnet before the external call.
 	advNetwork.subnets = append(advNetwork.subnets, subnet)
 	advNetwork.Unlock()
 
-	if !isPrefixAdvertised(ctx, subnet) {
+	a, err := isPrefixAdvertised(ctx, subnet)
+	if err != nil {
+		advNetwork.Lock()
+		// Remove the reserved subnet if failed to check.
+		idx := slices.Index(advNetwork.subnets, subnet)
+		if idx >= 0 {
+			advNetwork.subnets = slices.Delete(advNetwork.subnets, idx, idx+1)
+		}
+		advNetwork.Unlock()
+		return fmt.Errorf("check if subnet %s is advertised: %w", subnet, err)
+	}
+	if !a {
 		if err := advertisePrefix(ctx, subnet); err != nil {
 			advNetwork.Lock()
 			// Remove the reserved subnet if advertising failed.
@@ -139,12 +155,26 @@ func delAdvertisedNetwork(ctx context.Context, netID string) error {
 	subnets := append([]string(nil), advNetwork.subnets...)
 	advNetwork.Unlock()
 
+	// A partial failure deliberately leaves the network in the map: a retry is
+	// safe because [isPrefixAdvertised] reports already-withdrawn subnets as
+	// not advertised, so they are skipped on the next attempt. All errors are
+	// reported.
+	var errs []string
 	for _, subnet := range subnets {
-		if isPrefixAdvertised(ctx, subnet) {
+		a, err := isPrefixAdvertised(ctx, subnet)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("check if subnet %s is advertised: %s", subnet, err))
+			continue
+		}
+		if a {
 			if err := withdrawPrefix(ctx, subnet); err != nil {
-				return fmt.Errorf("withdraw the subnet %s: %w", subnet, err)
+				errs = append(errs, fmt.Sprintf("withdraw the subnet %s: %s", subnet, err))
 			}
 		}
+	}
+
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, ";"))
 	}
 
 	lbServer.advertisedNetworksMu.Lock()

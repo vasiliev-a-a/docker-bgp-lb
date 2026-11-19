@@ -192,11 +192,12 @@ func (d *bgpLB) EndpointInfo(r *api.InfoRequest) (*api.InfoResponse, error) {
 	endpointInfo := bgpNetwork.endpoints[r.EndpointID]
 	if endpointInfo != nil {
 		value["veth_outside"] = endpointInfo.vethOutside
-	}
-	if endpointInfo.endpointInterface != nil {
-		value["ipv4_address"] = endpointInfo.endpointInterface.Address
-		value["ipv6_address"] = endpointInfo.endpointInterface.AddressIPv6
-		value["mac_address"] = endpointInfo.endpointInterface.MacAddress
+
+		if endpointInfo.endpointInterface != nil {
+			value["ipv4_address"] = endpointInfo.endpointInterface.Address
+			value["ipv6_address"] = endpointInfo.endpointInterface.AddressIPv6
+			value["mac_address"] = endpointInfo.endpointInterface.MacAddress
+		}
 	}
 
 	resp := &api.InfoResponse{
